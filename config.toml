@@ -1,0 +1,182 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { z } from "zod";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/lib/auth-context";
+import { fetchProjects } from "@/lib/queries";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Plus, FolderKanban, Calendar, ArrowRight, Search } from "lucide-react";
+import { toast } from "sonner";
+import { motion } from "framer-motion";
+
+export const Route = createFileRoute("/_authenticated/projects")({ component: Projects });
+
+const schema = z.object({
+  title: z.string().trim().min(1).max(120),
+  description: z.string().max(2000).optional(),
+  status: z.enum(["planning", "active", "on_hold", "completed"]),
+  deadline: z.string().optional(),
+});
+
+const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
+  planning: "secondary",
+  active: "default",
+  on_hold: "outline",
+  completed: "outline",
+};
+
+function Projects() {
+  const { user, role } = useAuth();
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({ queryKey: ["projects"], queryFn: fetchProjects });
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<string>("all");
+  const [form, setForm] = useState({ title: "", description: "", status: "planning" as const, deadline: "" });
+
+  const create = useMutation({
+    mutationFn: async () => {
+      const parsed = schema.parse(form);
+      const { error } = await supabase.from("projects").insert({
+        title: parsed.title,
+        description: parsed.description || null,
+        status: parsed.status,
+        deadline: parsed.deadline || null,
+        created_by: user!.id,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Project created");
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      setOpen(false);
+      setForm({ title: "", description: "", status: "planning", deadline: "" });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const filtered = (data ?? []).filter((p) => {
+    if (filter !== "all" && p.status !== filter) return false;
+    if (search && !p.title.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="font-display text-3xl font-bold">Projects</h1>
+          <p className="text-sm text-muted-foreground">{data?.length ?? 0} total</p>
+        </div>
+        {role === "admin" && (
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button><Plus className="mr-1 h-4 w-4" />New project</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader><DialogTitle>Create a project</DialogTitle></DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Title</Label>
+                  <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Description</Label>
+                  <Textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label>Status</Label>
+                    <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as typeof form.status })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="planning">Planning</SelectItem>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="on_hold">On hold</SelectItem>
+                        <SelectItem value="completed">Completed</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Deadline</Label>
+                    <Input type="date" value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} />
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button onClick={() => create.mutate()} disabled={create.isPending}>Create</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-64">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input placeholder="Search projects..." className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <Select value={filter} onValueChange={setFilter}>
+          <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All statuses</SelectItem>
+            <SelectItem value="planning">Planning</SelectItem>
+            <SelectItem value="active">Active</SelectItem>
+            <SelectItem value="on_hold">On hold</SelectItem>
+            <SelectItem value="completed">Completed</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {isLoading ? (
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-44" />)}
+        </div>
+      ) : filtered.length === 0 ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+            <FolderKanban className="h-12 w-12 text-muted-foreground/40" />
+            <h3 className="mt-4 font-display text-lg font-semibold">No projects yet</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {role === "admin" ? "Create your first project to get started." : "Ask an admin to add you to a project."}
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {filtered.map((p, i) => (
+            <motion.div key={p.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}>
+              <Link to="/projects/$projectId" params={{ projectId: p.id }} className="block group">
+                <Card className="h-full transition-all hover:border-primary/40 hover:shadow-[var(--shadow-glow)]">
+                  <CardContent className="p-6">
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="font-display text-lg font-semibold leading-tight">{p.title}</h3>
+                      <Badge variant={STATUS_VARIANT[p.status]} className="capitalize">{p.status.replace("_", " ")}</Badge>
+                    </div>
+                    <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{p.description || "No description."}</p>
+                    <div className="mt-6 flex items-center justify-between text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <Calendar className="h-3 w-3" />
+                        {p.deadline ? new Date(p.deadline).toLocaleDateString() : "No deadline"}
+                      </span>
+                      <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            </motion.div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,274 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { z } from "zod";
+import { DndContext, DragEndEvent, DragOverlay, PointerSensor, useSensor, useSensors, useDraggable, useDroppable } from "@dnd-kit/core";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/lib/auth-context";
+import { fetchProject, fetchTasks, fetchProfiles, fetchProjectMembers } from "@/lib/queries";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Plus, ArrowLeft, UserPlus, Calendar, MessageSquare } from "lucide-react";
+import { toast } from "sonner";
+
+export const Route = createFileRoute("/_authenticated/projects/$projectId")({ component: ProjectDetail });
+
+type TaskStatus = "todo" | "in_progress" | "review" | "done";
+const COLUMNS: { key: TaskStatus; label: string }[] = [
+  { key: "todo", label: "To do" },
+  { key: "in_progress", label: "In progress" },
+  { key: "review", label: "Review" },
+  { key: "done", label: "Done" },
+];
+const PRIORITY_COLOR: Record<string, string> = {
+  low: "text-muted-foreground",
+  medium: "text-primary-glow",
+  high: "text-warning",
+  urgent: "text-destructive",
+};
+
+const taskSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  description: z.string().max(2000).optional(),
+  priority: z.enum(["low", "medium", "high", "urgent"]),
+  due_date: z.string().optional(),
+  assigned_to: z.string().optional(),
+});
+
+function ProjectDetail() {
+  const { projectId } = Route.useParams();
+  const { user, role } = useAuth();
+  const qc = useQueryClient();
+  const project = useQuery({ queryKey: ["project", projectId], queryFn: () => fetchProject(projectId) });
+  const tasks = useQuery({ queryKey: ["tasks", projectId], queryFn: () => fetchTasks(projectId) });
+  const profiles = useQuery({ queryKey: ["profiles"], queryFn: fetchProfiles });
+  const members = useQuery({ queryKey: ["members", projectId], queryFn: () => fetchProjectMembers(projectId) });
+
+  const [taskOpen, setTaskOpen] = useState(false);
+  const [memberOpen, setMemberOpen] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [form, setForm] = useState({ title: "", description: "", priority: "medium" as const, due_date: "", assigned_to: "" });
+  const [memberId, setMemberId] = useState<string>("");
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  const tasksByStatus = useMemo(() => {
+    const grouped: Record<TaskStatus, typeof tasks.data> = { todo: [], in_progress: [], review: [], done: [] };
+    (tasks.data ?? []).forEach((t) => grouped[t.status as TaskStatus]?.push(t));
+    return grouped;
+  }, [tasks.data]);
+
+  const create = useMutation({
+    mutationFn: async () => {
+      const parsed = taskSchema.parse(form);
+      const { error } = await supabase.from("tasks").insert({
+        project_id: projectId,
+        title: parsed.title,
+        description: parsed.description || null,
+        priority: parsed.priority,
+        due_date: parsed.due_date || null,
+        assigned_to: parsed.assigned_to || null,
+        created_by: user!.id,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Task created");
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      setTaskOpen(false);
+      setForm({ title: "", description: "", priority: "medium", due_date: "", assigned_to: "" });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const updateStatus = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: TaskStatus }) => {
+      const { error } = await supabase.from("tasks").update({ status }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const addMember = useMutation({
+    mutationFn: async () => {
+      if (!memberId) throw new Error("Select a member");
+      const { error } = await supabase.from("project_members").insert({ project_id: projectId, user_id: memberId });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Member added");
+      qc.invalidateQueries({ queryKey: ["members", projectId] });
+      setMemberOpen(false);
+      setMemberId("");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const onDragEnd = (e: DragEndEvent) => {
+    setActiveId(null);
+    const taskId = e.active.id as string;
+    const status = e.over?.id as TaskStatus | undefined;
+    if (!status) return;
+    const task = (tasks.data ?? []).find((t) => t.id === taskId);
+    if (!task || task.status === status) return;
+    updateStatus.mutate({ id: taskId, status });
+  };
+
+  const activeTask = activeId ? (tasks.data ?? []).find((t) => t.id === activeId) : null;
+  const profileMap = new Map((profiles.data ?? []).map((p) => [p.id, p]));
+  const memberIds = new Set([...(members.data ?? []).map((m) => m.user_id), project.data?.created_by].filter(Boolean));
+  const availableMembers = (profiles.data ?? []).filter((p) => !memberIds.has(p.id));
+
+  if (project.isLoading) return <div className="text-muted-foreground">Loading...</div>;
+  if (!project.data) return <div className="text-muted-foreground">Project not found.</div>;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <Link to="/projects" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="h-3 w-3" /> All projects
+        </Link>
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="font-display text-3xl font-bold">{project.data.title}</h1>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{project.data.description || "No description."}</p>
+            <div className="mt-3 flex items-center gap-2">
+              <Badge className="capitalize">{project.data.status.replace("_", " ")}</Badge>
+              {project.data.deadline && (
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Calendar className="h-3 w-3" />
+                  {new Date(project.data.deadline).toLocaleDateString()}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            {role === "admin" && (
+              <Dialog open={memberOpen} onOpenChange={setMemberOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline"><UserPlus className="mr-1 h-4 w-4" />Add member</Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader><DialogTitle>Add team member</DialogTitle></DialogHeader>
+                  <Select value={memberId} onValueChange={setMemberId}>
+                    <SelectTrigger><SelectValue placeholder="Select a person" /></SelectTrigger>
+                    <SelectContent>
+                      {availableMembers.length === 0 && <SelectItem value="none" disabled>Everyone is already added</SelectItem>}
+                      {availableMembers.map((p) => <SelectItem key={p.id} value={p.id}>{p.name || p.email}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <DialogFooter><Button onClick={() => addMember.mutate()} disabled={addMember.isPending || !memberId}>Add</Button></DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+            {role === "admin" && (
+              <Dialog open={taskOpen} onOpenChange={setTaskOpen}>
+                <DialogTrigger asChild>
+                  <Button><Plus className="mr-1 h-4 w-4" />New task</Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader><DialogTitle>Create task</DialogTitle></DialogHeader>
+                  <div className="space-y-4">
+                    <div className="space-y-2"><Label>Title</Label><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
+                    <div className="space-y-2"><Label>Description</Label><Textarea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-2">
+                        <Label>Priority</Label>
+                        <Select value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v as typeof form.priority })}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="low">Low</SelectItem>
+                            <SelectItem value="medium">Medium</SelectItem>
+                            <SelectItem value="high">High</SelectItem>
+                            <SelectItem value="urgent">Urgent</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2"><Label>Due date</Label><Input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} /></div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Assignee</Label>
+                      <Select value={form.assigned_to} onValueChange={(v) => setForm({ ...form, assigned_to: v })}>
+                        <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                        <SelectContent>
+                          {(profiles.data ?? []).map((p) => <SelectItem key={p.id} value={p.id}>{p.name || p.email}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <DialogFooter><Button onClick={() => create.mutate()} disabled={create.isPending}>Create</Button></DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <DndContext sensors={sensors} onDragStart={(e) => setActiveId(e.active.id as string)} onDragEnd={onDragEnd}>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {COLUMNS.map((col) => (
+            <Column key={col.key} id={col.key} label={col.label} count={tasksByStatus[col.key]?.length ?? 0}>
+              {(tasksByStatus[col.key] ?? []).map((t) => (
+                <TaskCard key={t.id} task={t} assignee={t.assigned_to ? profileMap.get(t.assigned_to) : null} />
+              ))}
+            </Column>
+          ))}
+        </div>
+        <DragOverlay>
+          {activeTask && <TaskCard task={activeTask} assignee={activeTask.assigned_to ? profileMap.get(activeTask.assigned_to) : null} dragging />}
+        </DragOverlay>
+      </DndContext>
+    </div>
+  );
+}
+
+function Column({ id, label, count, children }: { id: string; label: string; count: number; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`rounded-xl border border-border bg-card/40 p-3 transition-colors ${isOver ? "border-primary/60 bg-card/70" : ""}`}
+    >
+      <div className="mb-3 flex items-center justify-between px-1">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">{label}</h3>
+        <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{count}</span>
+      </div>
+      <div className="space-y-2 min-h-32">{children}</div>
+    </div>
+  );
+}
+
+function TaskCard({ task, assignee, dragging }: { task: { id: string; title: string; priority: string; due_date: string | null; description: string | null }; assignee?: { name: string; email: string } | null; dragging?: boolean }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id });
+  return (
+    <Card
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      className={`cursor-grab p-3 transition-all hover:border-primary/40 ${isDragging ? "opacity-30" : ""} ${dragging ? "rotate-3 shadow-[var(--shadow-glow)]" : ""}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-medium leading-tight">{task.title}</p>
+        <span className={`text-[10px] font-bold uppercase ${PRIORITY_COLOR[task.priority]}`}>{task.priority}</span>
+      </div>
+      {task.description && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{task.description}</p>}
+      <div className="mt-3 flex items-center justify-between text-[11px] text-muted-foreground">
+        <span className="flex items-center gap-1">
+          {task.due_date && <><Calendar className="h-3 w-3" />{new Date(task.due_date).toLocaleDateString()}</>}
+        </span>
+        {assignee && (
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent text-[10px] font-semibold uppercase">
+            {(assignee.name || assignee.email)[0]}
+          </span>
+        )}
+      </div>
+    </Card>
+  );
+}

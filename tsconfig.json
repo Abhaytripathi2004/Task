@@ -1,0 +1,117 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { motion } from "framer-motion";
+import { ArrowRight, CheckCircle2, KanbanSquare, LineChart, Shield, Users } from "lucide-react";
+import { Button } from "@/components/ui/button";
+
+export const Route = createFileRoute("/")({
+  component: Landing,
+});
+
+const features = [
+  { icon: KanbanSquare, title: "Kanban that flows", desc: "Drag-and-drop boards with status tracking that mirrors how teams actually work." },
+  { icon: LineChart, title: "Live analytics", desc: "Completion rates, overdue counts, and team productivity in real time." },
+  { icon: Shield, title: "Role-based control", desc: "Admins steer the workspace, members focus on their tasks. Powered by row-level security." },
+  { icon: Users, title: "Built for teams", desc: "Assign work, comment on tasks, and stay aligned across projects." },
+];
+
+function Landing() {
+  return (
+    <div className="min-h-screen overflow-hidden">
+      {/* Nav */}
+      <nav className="relative z-10 mx-auto flex max-w-7xl items-center justify-between px-6 py-6">
+        <div className="flex items-center gap-2">
+          <div className="h-8 w-8 rounded-lg bg-[image:var(--gradient-primary)] shadow-[var(--shadow-glow)]" />
+          <span className="font-display text-lg font-semibold">Task Manager</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" asChild><Link to="/login">Sign in</Link></Button>
+          <Button asChild><Link to="/signup">Get started</Link></Button>
+        </div>
+      </nav>
+
+      {/* Hero */}
+      <section className="relative">
+        <div className="pointer-events-none absolute inset-0 bg-[image:var(--gradient-hero)]" />
+        <div className="relative mx-auto max-w-5xl px-6 pt-20 pb-32 text-center">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6 }}
+            className="inline-flex items-center gap-2 rounded-full border border-border bg-card/50 px-4 py-1.5 text-xs text-muted-foreground backdrop-blur"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />
+            Now in early access
+          </motion.div>
+          <motion.h1
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.7, delay: 0.1 }}
+            className="mx-auto mt-6 max-w-3xl font-display text-5xl font-bold leading-[1.05] tracking-tight md:text-7xl"
+          >
+            Where teams turn{" "}
+            <span className="bg-[image:var(--gradient-primary)] bg-clip-text text-transparent">chaos</span>{" "}
+            into shipped work.
+          </motion.h1>
+          <motion.p
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.7, delay: 0.25 }}
+            className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground"
+          >
+            Projects, tasks, Kanban boards, and analytics — all in one workspace built around how modern teams actually collaborate.
+          </motion.p>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.7, delay: 0.35 }}
+            className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row"
+          >
+            <Button size="lg" asChild className="shadow-[var(--shadow-glow)]">
+              <Link to="/signup">Start free <ArrowRight className="ml-1 h-4 w-4" /></Link>
+            </Button>
+            <Button size="lg" variant="ghost" asChild>
+              <Link to="/login">I already have an account</Link>
+            </Button>
+          </motion.div>
+        </div>
+      </section>
+
+      {/* Features grid */}
+      <section className="mx-auto max-w-6xl px-6 pb-32">
+        <div className="grid gap-6 md:grid-cols-2">
+          {features.map((f, i) => (
+            <motion.div
+              key={f.title}
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5, delay: i * 0.05 }}
+              className="group relative rounded-2xl border border-border bg-card p-8 shadow-[var(--shadow-card)] transition-all hover:border-primary/40"
+            >
+              <div className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-accent">
+                <f.icon className="h-5 w-5 text-primary-glow" />
+              </div>
+              <h3 className="font-display text-xl font-semibold">{f.title}</h3>
+              <p className="mt-2 text-sm text-muted-foreground">{f.desc}</p>
+            </motion.div>
+          ))}
+        </div>
+
+        <div className="mt-20 rounded-3xl border border-border bg-[image:var(--gradient-hero)] p-12 text-center">
+          <CheckCircle2 className="mx-auto h-10 w-10 text-success" />
+          <h2 className="mt-4 font-display text-3xl font-bold md:text-4xl">Ready when you are.</h2>
+          <p className="mx-auto mt-3 max-w-lg text-muted-foreground">
+            The first signup becomes the admin. Invite the rest of the team and start shipping.
+          </p>
+          <Button size="lg" className="mt-8" asChild>
+            <Link to="/signup">Create your workspace</Link>
+          </Button>
+        </div>
+      </section>
+
+      <footer className="border-t border-border py-8 text-center text-xs text-muted-foreground">
+        Built with Task Manager · A modern team task manager
+      </footer>
+    </div>
+  );
+}
